@@ -67,8 +67,8 @@ class custom_dataset(Dataset):
         ])
         self.std_text = standard_text.Std_Text(cfg.font_path)
 
-        if(self.mode == 'train'):
-            self.data_dir = cfg.data_dir
+        if self.mode == 'train':
+            self.data_dir = cfg.train_data_dir
             if isinstance(self.data_dir, str):
                 self.data_dir = [self.data_dir]
             assert isinstance(self.data_dir, list)
@@ -81,8 +81,8 @@ class custom_dataset(Dataset):
                     lines = f.readlines()
                 self.name_list += [os.path.join(tmp_data_dir, '{}', line.strip().split()[0]) for line in lines]
                 for line in lines:
-                    tmp_key, tmp_val = line.strip().split()
-                    self.i_t_list[tmp_dataset_name + '_' + tmp_key] = tmp_val
+                    line_split = line.strip().split(maxsplit=1)
+                    self.i_t_list[tmp_dataset_name + '_' + line_split[0]] = line_split[1]
 
             self.len_synth = len(self.name_list)
             assert self.len_synth == len(self.i_t_list)
@@ -113,7 +113,7 @@ class custom_dataset(Dataset):
             with open(os.path.join(data_dir, '../' + i_t_name), 'r') as f:
                 lines = f.readlines()
             self.name_list = [line.strip().split()[0] for line in lines]
-            self.i_t_list = {line.strip().split()[0]: line.strip().split()[1] for line in lines}
+            self.i_t_list = {line.strip().split(maxsplit=1)[0]: line.strip().split(maxsplit=1)[1] for line in lines}
 
     def custom_len(self):
         return self.len_synth, self.len_real
@@ -138,8 +138,7 @@ class custom_dataset(Dataset):
                 mask_s = Image.open(img_name.format(self.cfg.mask_s_dir))
                 with open(img_name.format(self.cfg.txt_dir)[:-4] + '.txt', 'r') as f:
                     lines = f.readlines()
-                text = lines[0].strip().split()[-1]
-                text = re.sub("[^0-9a-zA-Z]+", "", text).lower()
+                text = lines[0].strip().split(maxsplit=1)[1].lower()
                 i_t = self.transform(i_t)
                 i_s = self.transform(i_s)
                 t_b = self.transform(t_b)
@@ -156,8 +155,7 @@ class custom_dataset(Dataset):
                     i_s = i_s.convert('RGB')
                 with open(img_name.format(self.cfg.txt_dir)[:-4] + '.txt', 'r') as f:
                     lines = f.readlines()
-                text = lines[0].strip().split()[-1]
-                text = re.sub("[^0-9a-zA-Z]+", "", text).lower()
+                text = lines[0].strip().split(maxsplit=1)[1].lower()
                 i_t = self.transform(i_t)
                 i_s = self.transform(i_s)
                 t_f = i_s
@@ -189,7 +187,7 @@ class erase_dataset(Dataset):
             transforms.ToTensor()
         ])
         if(self.mode == 'train'):
-            self.data_dir = cfg.data_dir
+            self.data_dir = cfg.train_data_dir
             if isinstance(self.data_dir, str):
                 self.data_dir = [self.data_dir]
             assert isinstance(self.data_dir, list)

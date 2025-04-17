@@ -2,6 +2,7 @@ import os
 import argparse
 import logging
 import numpy as np
+import math
 import cv2
 import torch
 import torchvision.transforms.functional as F
@@ -13,6 +14,7 @@ from datagen import custom_dataset, TwoStreamBatchSampler
 from model import Generator, Discriminator, Vgg19
 from rec_model import Rec_Model
 from rec_utils import AttnLabelConverter
+from predict import MyDilate
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -62,7 +64,7 @@ def main():
         len_synth, len_real = train_data.custom_len()
         synth_idxs = list(range(len_synth))
         real_idxs = list(range(len_synth, len_synth + len_real))
-        batch_sampler = TwoStreamBatchSampler(synth_idxs, real_idxs, cfg.batch_size, cfg.real_bs)  # default: shuffle = True, drop_last = True
+        batch_sampler = TwoStreamBatchSampler(synth_idxs, real_idxs, cfg.train_batch_size, cfg.real_bs)  # default: shuffle = True, drop_last = True
         train_loader = DataLoader(
             dataset=train_data,
             batch_sampler=batch_sampler,
@@ -71,23 +73,26 @@ def main():
     else:
         train_loader = DataLoader(
             dataset=train_data,
-            batch_size=cfg.batch_size,
+            batch_size=cfg.train_batch_size,
             shuffle=True,
             num_workers=cfg.num_workers,
             pin_memory=True,
             drop_last=True)
-    eval_data = custom_dataset(cfg, data_dir=cfg.example_data_dir, mode='eval')
+
+    eval_data = custom_dataset(cfg, data_dir=cfg.val_data_dir, mode='eval')
     eval_loader = DataLoader(
         dataset=eval_data,
-        batch_size=1,
-        shuffle=False)
+        batch_size=cfg.val_batch_size,
+        shuffle=False
+    )
 
     G = Generator(cfg, in_channels=3).cuda()
     D1 = Discriminator(cfg, in_channels=6).cuda()
     D2 = Discriminator(cfg, in_channels=6).cuda()
     vgg_features = Vgg19(cfg.vgg19_weights).cuda()
+
     if cfg.with_recognizer:
-        converter = AttnLabelConverter('0123456789abcdefghijklmnopqrstuvwxyz')
+        converter = AttnLabelConverter('0123456789абвгґдеєжзиіїйклмнопрстуфхцчшщьюя')
         Recognizer = Rec_Model(cfg)
         rec_state_dict = torch.load(cfg.rec_ckpt_path, map_location='cpu')
         if len(rec_state_dict) == 1:
@@ -112,7 +117,7 @@ def main():
         D2_solver.load_state_dict(checkpoint['d2_optimizer'])
         logger.info('Model loaded: {}'.format(cfg.ckpt_path))
     else:
-        logger.info('Model not found')
+        logger.info('Mostel Model not found')
     if os.path.exists(cfg.inpaint_ckpt_path):
         checkpoint = torch.load(cfg.inpaint_ckpt_path, map_location='cpu')
         G.load_state_dict(checkpoint['generator'], strict=False)
@@ -177,8 +182,8 @@ def main():
         o_b_ori, o_b, o_f, x_t_tps, o_mask_s, o_mask_t = G(i_t, i_s)
 
         if cfg.with_real_data:
-            i_db_true = torch.cat((t_b[:(cfg.batch_size - cfg.real_bs) // gpu_num], i_s[:(cfg.batch_size - cfg.real_bs) // gpu_num]), dim=1)
-            i_db_pred = torch.cat((o_b[:(cfg.batch_size - cfg.real_bs) // gpu_num], i_s[:(cfg.batch_size - cfg.real_bs) // gpu_num]), dim=1)
+            i_db_true = torch.cat((t_b[:(cfg.train_batch_size - cfg.real_bs) // gpu_num], i_s[:(cfg.train_batch_size - cfg.real_bs) // gpu_num]), dim=1)
+            i_db_pred = torch.cat((o_b[:(cfg.train_batch_size - cfg.real_bs) // gpu_num], i_s[:(cfg.train_batch_size - cfg.real_bs) // gpu_num]), dim=1)
         else:
             i_db_true = torch.cat((t_b, i_s), dim=1)
             i_db_pred = torch.cat((o_b, i_s), dim=1)
@@ -207,7 +212,7 @@ def main():
         o_b_ori, o_b, o_f, x_t_tps, o_mask_s, o_mask_t = G(i_t, i_s)
 
         if cfg.with_real_data:
-            i_db_pred = torch.cat((o_b[:(cfg.batch_size - cfg.real_bs) // gpu_num], i_s[:(cfg.batch_size - cfg.real_bs) // gpu_num]), dim=1)
+            i_db_pred = torch.cat((o_b[:(cfg.train_batch_size - cfg.real_bs) // gpu_num], i_s[:(cfg.train_batch_size - cfg.real_bs) // gpu_num]), dim=1)
         else:
             i_db_pred = torch.cat((o_b, i_s), dim=1)
         i_df_pred = torch.cat((o_f, i_t), dim=1)
@@ -260,34 +265,68 @@ def main():
                     writer.add_scalar(name + '/' + sub_name, sub_metric, step)
                 logger.info(loss_str)
 
-        if ((step + 1) % cfg.gen_example_interval == 0):
-            savedir = os.path.join(cfg.example_result_dir, 'iter-' + str(step + 1).zfill(len(str(cfg.max_iter))))
+
+        if ((step + 1) % cfg.validation_interval == 0):
+
+            savedir = os.path.join(cfg.val_result_dir, 'iter-' + str(step + 1).zfill(len(str(cfg.max_iter))))
+
+            G.eval()
+            eval_iter = iter(eval_loader)
+
+            if cfg.dilate:
+                mydilate = MyDilate()
+
             with torch.no_grad():
-                for inp in eval_loader:
+                for step in tqdm(range(len(eval_data)), total=math.ceil(len(eval_data) / cfg.val_batch_size)):
+                    try:
+                        inp = eval_iter.next()
+                    except StopIteration:
+                        break
+
                     i_t = inp[0].cuda()
                     i_s = inp[1].cuda()
-                    name = str(inp[2][0])
-                    name, suffix = name.split('.')
+                    name_list = inp[2]
 
-                    G.eval()
-                    o_b_ori, o_b, o_f, x_t_tps, o_mask_s, o_mask_t = G(i_t, i_s)
-                    G.train()
-                    
-                    if not os.path.exists(savedir):
-                        os.makedirs(savedir)
-                    o_mask_s = o_mask_s.detach().squeeze(0).to('cpu').numpy().transpose(1, 2, 0)
-                    o_mask_t = o_mask_t.detach().squeeze(0).to('cpu').numpy().transpose(1, 2, 0)
-                    x_t_tps = x_t_tps.detach().squeeze(0).to('cpu').numpy().transpose(1, 2, 0)
-                    o_b_ori = o_b_ori.detach().squeeze(0).to('cpu').numpy().transpose(1, 2, 0)
-                    o_b = o_b.detach().squeeze(0).to('cpu').numpy().transpose(1, 2, 0)
-                    o_f = o_f.detach().squeeze(0).to('cpu').numpy().transpose(1, 2, 0)
-                    cv2.imwrite(os.path.join(savedir, name + '_o_f.' + suffix), o_f[:, :, ::-1] * 255)
-                    cv2.imwrite(os.path.join(savedir, name + '_o_b_ori.' + suffix), o_b_ori[:, :, ::-1] * 255)
-                    cv2.imwrite(os.path.join(savedir, name + '_o_b.' + suffix), o_b[:, :, ::-1] * 255)
-                    cv2.imwrite(os.path.join(savedir, name + '_o_mask_s.' + suffix), o_mask_s * 255)
-                    cv2.imwrite(os.path.join(savedir, name + '_o_mask_t.' + suffix), o_mask_t * 255)
-                    cv2.imwrite(os.path.join(savedir, name + '_x_t_tps.' + suffix), x_t_tps[:, :, ::-1] * 255)    
-                    
+                    gen_o_b_ori, gen_o_b, gen_o_f, gen_x_t_tps, gen_o_mask_s, gen_o_mask_t = G(i_t, i_s)
+
+                    gen_o_b_ori = gen_o_b_ori * 255
+                    gen_o_b = gen_o_b * 255
+                    gen_o_f = gen_o_f * 255
+                    gen_x_t_tps = gen_x_t_tps * 255
+
+                    for tmp_idx in range(gen_o_f.shape[0]):
+                        name = str(name_list[tmp_idx])
+                        name, suffix = name.split('.')
+
+                        o_mask_s = gen_o_mask_s[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+                        o_mask_t = gen_o_mask_t[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+                        o_b_ori = gen_o_b_ori[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+                        o_b = gen_o_b[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+                        o_f = gen_o_f[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+                        x_t_tps = gen_x_t_tps[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+
+                        ori_o_mask_s = o_mask_s
+                        if cfg.dilate:
+                            tmp_i_s = (i_s * 255)[tmp_idx].detach().to('cpu').numpy().transpose(1, 2, 0)
+                            o_mask_s = mydilate(o_mask_s)
+                            o_b = o_mask_s * o_b_ori + (1 - o_mask_s) * tmp_i_s
+
+                        if cfg.slm:
+                            alpha = 0.5
+                            o_f = o_mask_t * o_f + (1 - o_mask_t) * (alpha * o_b + (1 - alpha) * o_f)
+
+                        if cfg.vis:
+                            cv2.imwrite(os.path.join(savedir, name + '_o_f.' + suffix), o_f[:, :, ::-1])
+                            cv2.imwrite(os.path.join(savedir, name + '_o_b.' + suffix), o_b[:, :, ::-1])
+                            cv2.imwrite(os.path.join(savedir, name + '_o_b_ori.' + suffix), o_b_ori[:, :, ::-1])
+                            cv2.imwrite(os.path.join(savedir, name + '_o_mask_s.' + suffix), o_mask_s * 255)
+                            cv2.imwrite(os.path.join(savedir, name + '_o_mask_t.' + suffix), o_mask_t * 255)
+                            cv2.imwrite(os.path.join(savedir, name + '_x_t_tps.' + suffix), x_t_tps[:, :, ::-1])
+                        else:
+                            cv2.imwrite(os.path.join(savedir, name + '.' + suffix), o_f[:, :, ::-1])
+
+            G.train()
+
 
 if __name__ == '__main__':
     main()

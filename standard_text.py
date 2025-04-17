@@ -8,7 +8,7 @@ class Std_Text(object):
         self.height = 64
         self.max_width = 960
         self.border_width = 5
-        self.char_list = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        self.char_list = " 0123456789АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯабвгґдеєжзиіїйклмнопрстуфхцчшщьюя"
         font_height = self.get_valid_height(font_path)
         self.font = ImageFont.truetype(font_path, font_height)
 
@@ -39,10 +39,10 @@ class Std_Text(object):
 
 
 def main():
-    font_path = 'arial.ttf'
+    font_path = 'MPLUS1p-Regular.ttf'
     std_text = Std_Text(font_path)
 
-    tmp = std_text.draw_text('qwertyuiopasdfghjklzxcvbnm')
+    tmp = std_text.draw_text('憂鬱абвгґдеєжзиії')
     print(tmp.shape)
     cv2.imwrite('tmp.jpg', tmp)
 
