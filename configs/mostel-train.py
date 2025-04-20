@@ -76,3 +76,7 @@ tps_margins = (0.05, 0.05)
 predict_ckpt_path = None
 predict_data_dir = None
 predict_result_dir = checkpoint_savedir + 'pred_result'
+
+
+# YULA
+generator_path = "model/generator.pth"
