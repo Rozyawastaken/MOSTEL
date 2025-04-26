@@ -163,7 +163,7 @@ class YULA:
             merged_img.show()
             if not self.auto:
                 merge = input("Merge? (y | n)")
-                if lower(merge) in ('yes', 'y'):
+                if merge.lower() in ('yes', 'y'):
                     img = merged_img
                 else:
                     print("Skipping")
